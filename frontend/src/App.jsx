@@ -7,9 +7,11 @@ import MarketBar from './components/MarketBar';
 import RecentFills from './components/RecentFills';
 import EngineAccuracy from './components/EngineAccuracy';
 import PnLDecomposition from './components/PnLDecomposition';
+import RegimePage from './pages/RegimePage';
 import { api } from './api';
 
 export default function App() {
+  const [page, setPage] = useState('dashboard');
   const [time, setTime] = useState(new Date());
   const [health, setHealth] = useState(null);
 
@@ -28,6 +30,8 @@ export default function App() {
   const etTime = time.toLocaleTimeString('en-US', {
     timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit'
   });
+
+  if (page === 'regime') return <RegimePage onBack={() => setPage('dashboard')} />;
 
   // Market hours: 9:30 AM - 4:00 PM ET
   const etDate = new Date(time.toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -79,7 +83,9 @@ export default function App() {
           <div className="lg:col-span-2">
             <EquityChart />
           </div>
-          <RegimeStatus />
+          <div onClick={() => setPage('regime')} className="cursor-pointer hover:ring-1 hover:ring-slate-600 rounded-xl transition">
+            <RegimeStatus />
+          </div>
         </div>
 
         {/* Row 3: Positions + Fills */}

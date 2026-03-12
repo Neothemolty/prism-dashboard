@@ -195,6 +195,71 @@ async def get_regime():
     }
 
 
+@app.get("/api/prism/regime/detail")
+async def get_regime_detail():
+    """Full regime detail for dedicated regime page."""
+    entries = read_jsonl("prism_regime_gate.jsonl")
+    history = read_jsonl("prism_regime_history.jsonl")
+    
+    if not entries:
+        return {"regime": "UNKNOWN", "indices": [], "history": [], "transitions": {}}
+    
+    spy_entry = next((e for e in entries if e.get("ticker") == "SPY"), entries[-1])
+    regime = spy_entry.get("regime", "UNKNOWN")
+    score = spy_entry.get("regime_score", 0)
+    
+    # Determine previous regime from history
+    prev_regime = None
+    if len(history) >= 2:
+        prev_regime = history[-2].get("regime")
+    elif len(history) == 1:
+        prev_regime = history[-1].get("regime")
+    
+    # Regime transition map — what regimes can follow what
+    transition_map = {
+        "BULL_TREND":    {"likely": ["BULL_VOLATILE", "TRANSITION"], "unlikely": ["BEAR_VOLATILE"], "triggers": ["VIX spike above 25", "SMA50 breakdown", "MACD bearish cross on weekly"]},
+        "BULL_QUIET":    {"likely": ["BULL_TREND", "TRANSITION"], "unlikely": ["BEAR_VOLATILE"], "triggers": ["Breakout above resistance", "Volume surge", "Sector rotation broadening"]},
+        "BULL_VOLATILE": {"likely": ["BULL_TREND", "TRANSITION", "BEAR_VOLATILE"], "unlikely": ["BULL_QUIET"], "triggers": ["VIX mean reversion below 20", "Earnings catalyst", "Fed pivot"]},
+        "TRANSITION":    {"likely": ["BULL_QUIET", "BEAR_QUIET", "BULL_TREND", "BEAR_VOLATILE"], "unlikely": [], "triggers": ["SMA50 reclaim = bull", "SMA200 breakdown = bear", "VIX direction", "Yield curve signal"]},
+        "BEAR_QUIET":    {"likely": ["BEAR_VOLATILE", "TRANSITION"], "unlikely": ["BULL_TREND"], "triggers": ["Capitulation volume", "VIX spike", "Credit spreads widening"]},
+        "BEAR_VOLATILE": {"likely": ["BEAR_QUIET", "TRANSITION"], "unlikely": ["BULL_TREND"], "triggers": ["VIX exhaustion above 35", "Oversold RSI weekly", "Policy intervention"]},
+        "RISK_OFF":      {"likely": ["BEAR_VOLATILE", "TRANSITION"], "unlikely": ["BULL_TREND"], "triggers": ["Forced liquidation ends", "Central bank action", "Geopolitical de-escalation"]},
+        "RISK_ON":       {"likely": ["BULL_TREND", "BULL_VOLATILE"], "unlikely": ["BEAR_VOLATILE"], "triggers": ["Momentum exhaustion", "Overbought weekly RSI", "Euphoria indicators"]},
+    }
+    
+    transitions = transition_map.get(regime, {"likely": ["TRANSITION"], "unlikely": [], "triggers": []})
+    
+    # Regime characteristics
+    characteristics = {
+        "BULL_TREND":    {"stance": "Full offense", "position_size": "100%", "strategy": "Momentum longs, breakout entries, trail stops wide", "avoid": "Shorting, mean-reversion", "risk": "LOW"},
+        "BULL_QUIET":    {"stance": "Accumulate", "position_size": "80%", "strategy": "Buy dips to SMA20, sell puts for income", "avoid": "Chasing extended names", "risk": "LOW"},
+        "BULL_VOLATILE": {"stance": "Selective offense", "position_size": "60%", "strategy": "Buy sharp dips, tighter stops, reduce on rips", "avoid": "Full position sizes, overnight holds", "risk": "MEDIUM"},
+        "TRANSITION":    {"stance": "Neutral / hedged", "position_size": "40-50%", "strategy": "Reduce exposure, hedge with puts, wait for clarity", "avoid": "New directional bets, conviction trades", "risk": "ELEVATED"},
+        "BEAR_QUIET":    {"stance": "Defensive", "position_size": "30%", "strategy": "Short rallies, put spreads, gold/bonds", "avoid": "Buying dips, bottom-fishing", "risk": "HIGH"},
+        "BEAR_VOLATILE": {"stance": "Maximum defense", "position_size": "20%", "strategy": "Cash heavy, deep OTM puts, VIX calls", "avoid": "Any longs except safe havens", "risk": "VERY HIGH"},
+        "RISK_OFF":      {"stance": "Bunker mode", "position_size": "10%", "strategy": "Cash is king, gold, short-term treasuries only", "avoid": "ALL equity exposure", "risk": "EXTREME"},
+        "RISK_ON":       {"stance": "Full risk", "position_size": "100%", "strategy": "Leverage longs, aggressive breakouts, sell puts", "avoid": "Hedges (waste of premium)", "risk": "LOW"},
+    }
+    
+    char = characteristics.get(regime, {"stance": "Unknown", "position_size": "50%", "strategy": "Wait", "avoid": "Everything", "risk": "UNKNOWN"})
+    
+    return {
+        "regime": regime,
+        "regime_score": score,
+        "signal": spy_entry.get("signal", "WAIT"),
+        "adx": spy_entry.get("adx", 0),
+        "recommendation": spy_entry.get("recommendation", ""),
+        "timestamp": spy_entry.get("timestamp", ""),
+        "previous_regime": prev_regime,
+        "indices": entries,
+        "history": history[-30:],  # Last 30 regime changes
+        "transitions": transitions,
+        "characteristics": char,
+        "ma_alignment": spy_entry.get("ma_alignment", {}),
+        "volatility_regime": spy_entry.get("volatility_regime", {}),
+    }
+
+
 @app.get("/api/prism/signals")
 async def get_signals(limit: int = 50):
     """Signal log entries."""

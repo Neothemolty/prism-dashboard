@@ -17,5 +17,6 @@ export const api = {
   engineAccuracy: () => fetchJSON('/api/prism/engine-accuracy'),
   marketSnapshot: () => fetchJSON('/api/market/snapshot'),
   fills:          (limit = 100) => fetchJSON(`/api/trades/fills?limit=${limit}`),
+  regimeDetail:   () => fetchJSON('/api/prism/regime/detail'),
   health:         () => fetchJSON('/api/health'),
 };
