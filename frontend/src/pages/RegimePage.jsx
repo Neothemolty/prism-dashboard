@@ -429,16 +429,16 @@ function RiskTab({ data, rm, allocation, cfg }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card title="Risk Parameters" icon="⚡">
           <div className="grid grid-cols-2 gap-6">
-            <Metric label="Daily VaR (95%)" value={`${rm.daily_var_95}%`} color="text-red-400" sub="Value at Risk" />
-            <Metric label="Daily CVaR (95%)" value={`${rm.daily_cvar_95}%`} color="text-red-400" sub="Conditional VaR (Tail)" />
-            <Metric label="Expected Max DD" value={`${rm.max_dd_pct}%`} color="text-red-400" sub="Max drawdown in regime" />
-            <Metric label="Expected Sharpe" value={rm.expected_sharpe?.toFixed(1)} 
-              color={rm.expected_sharpe > 0.5 ? 'text-emerald-400' : rm.expected_sharpe > 0 ? 'text-amber-400' : 'text-red-400'} 
+            <Metric label="Daily VaR (95%)" value={`${rm.daily_var_95 ?? '—'}%`} color="text-red-400" sub="Value at Risk" />
+            <Metric label="Daily CVaR (95%)" value={`${rm.daily_cvar_95 ?? '—'}%`} color="text-red-400" sub="Conditional VaR (Tail)" />
+            <Metric label="Expected Max DD" value={`${rm.max_dd_pct ?? '—'}%`} color="text-red-400" sub="Max drawdown in regime" />
+            <Metric label="Expected Sharpe" value={rm.expected_sharpe != null ? rm.expected_sharpe.toFixed(1) : '—'} 
+              color={(rm.expected_sharpe ?? 0) > 0.5 ? 'text-emerald-400' : (rm.expected_sharpe ?? 0) > 0 ? 'text-amber-400' : 'text-red-400'} 
               sub="Risk-adjusted return" />
             <Metric label="Kelly Fraction" value={`${((rm.kelly_fraction || 0) * 100).toFixed(0)}%`}
               color="text-blue-400" sub="Optimal bet size" />
-            <Metric label="Max Leverage" value={`${rm.leverage_max}x`}
-              color={rm.leverage_max >= 1.5 ? 'text-emerald-400' : rm.leverage_max >= 0.5 ? 'text-amber-400' : 'text-red-400'}
+            <Metric label="Max Leverage" value={`${rm.leverage_max ?? '—'}x`}
+              color={(rm.leverage_max ?? 0) >= 1.5 ? 'text-emerald-400' : (rm.leverage_max ?? 0) >= 0.5 ? 'text-amber-400' : 'text-red-400'}
               sub="Permitted leverage" />
           </div>
         </Card>
@@ -448,12 +448,12 @@ function RiskTab({ data, rm, allocation, cfg }) {
             <div>
               <div className="flex justify-between mb-2">
                 <span className="text-[10px] text-slate-500">MAX GROSS EXPOSURE</span>
-                <span className="text-xl font-black text-white">{rm.position_limit_pct}%</span>
+                <span className="text-xl font-black text-white">{rm.position_limit_pct ?? 50}%</span>
               </div>
               <div className="h-4 bg-slate-800 rounded-full overflow-hidden">
                 <div className={`h-full rounded-full ${
-                  rm.position_limit_pct >= 80 ? 'bg-emerald-500' : rm.position_limit_pct >= 40 ? 'bg-amber-500' : 'bg-red-500'
-                }`} style={{ width: `${rm.position_limit_pct}%` }} />
+                  (rm.position_limit_pct ?? 50) >= 80 ? 'bg-emerald-500' : (rm.position_limit_pct ?? 50) >= 40 ? 'bg-amber-500' : 'bg-red-500'
+                }`} style={{ width: `${rm.position_limit_pct ?? 50}%` }} />
               </div>
             </div>
             <div>
