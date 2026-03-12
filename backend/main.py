@@ -175,12 +175,24 @@ async def get_orders(status: str = "all", limit: int = 50):
 
 @app.get("/api/prism/regime")
 async def get_regime():
-    """Current regime gate status."""
+    """Current regime gate status — returns all index regimes + market conditions."""
     entries = read_jsonl("prism_regime_gate.jsonl")
     if not entries:
-        return {"regime": "UNKNOWN", "message": "No regime data yet"}
-    latest = entries[-1]
-    return latest
+        return {"regime": "UNKNOWN", "message": "No regime data yet", "indices": []}
+    
+    # Find the primary (SPY) entry for top-level regime
+    spy_entry = next((e for e in entries if e.get("ticker") == "SPY"), entries[-1])
+    
+    # Build rich response with all indices
+    return {
+        "regime": spy_entry.get("regime", "UNKNOWN"),
+        "regime_score": spy_entry.get("regime_score", 0),
+        "signal": spy_entry.get("signal", "WAIT"),
+        "recommendation": spy_entry.get("recommendation", ""),
+        "adx": spy_entry.get("adx", 0),
+        "timestamp": spy_entry.get("timestamp", ""),
+        "indices": entries
+    }
 
 
 @app.get("/api/prism/signals")
