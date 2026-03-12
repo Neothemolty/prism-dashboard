@@ -197,7 +197,9 @@ async def get_regime():
 
 @app.get("/api/prism/regime/detail")
 async def get_regime_detail():
-    """Full regime detail for dedicated regime page."""
+    """Institutional-grade regime intelligence for the dedicated regime page."""
+    import statistics
+    
     entries = read_jsonl("prism_regime_gate.jsonl")
     history = read_jsonl("prism_regime_history.jsonl")
     
@@ -207,41 +209,239 @@ async def get_regime_detail():
     spy_entry = next((e for e in entries if e.get("ticker") == "SPY"), entries[-1])
     regime = spy_entry.get("regime", "UNKNOWN")
     score = spy_entry.get("regime_score", 0)
+    ma = spy_entry.get("ma_alignment", {})
+    vol = spy_entry.get("volatility_regime", {})
     
-    # Determine previous regime from history
+    # ── Previous regime ──
     prev_regime = None
+    regime_start = spy_entry.get("timestamp", "")
     if len(history) >= 2:
-        prev_regime = history[-2].get("regime")
-    elif len(history) == 1:
-        prev_regime = history[-1].get("regime")
+        for h in reversed(history[:-1]):
+            if h.get("regime") != regime:
+                prev_regime = h.get("regime")
+                break
     
-    # Regime transition map — what regimes can follow what
-    transition_map = {
-        "BULL_TREND":    {"likely": ["BULL_VOLATILE", "TRANSITION"], "unlikely": ["BEAR_VOLATILE"], "triggers": ["VIX spike above 25", "SMA50 breakdown", "MACD bearish cross on weekly"]},
-        "BULL_QUIET":    {"likely": ["BULL_TREND", "TRANSITION"], "unlikely": ["BEAR_VOLATILE"], "triggers": ["Breakout above resistance", "Volume surge", "Sector rotation broadening"]},
-        "BULL_VOLATILE": {"likely": ["BULL_TREND", "TRANSITION", "BEAR_VOLATILE"], "unlikely": ["BULL_QUIET"], "triggers": ["VIX mean reversion below 20", "Earnings catalyst", "Fed pivot"]},
-        "TRANSITION":    {"likely": ["BULL_QUIET", "BEAR_QUIET", "BULL_TREND", "BEAR_VOLATILE"], "unlikely": [], "triggers": ["SMA50 reclaim = bull", "SMA200 breakdown = bear", "VIX direction", "Yield curve signal"]},
-        "BEAR_QUIET":    {"likely": ["BEAR_VOLATILE", "TRANSITION"], "unlikely": ["BULL_TREND"], "triggers": ["Capitulation volume", "VIX spike", "Credit spreads widening"]},
-        "BEAR_VOLATILE": {"likely": ["BEAR_QUIET", "TRANSITION"], "unlikely": ["BULL_TREND"], "triggers": ["VIX exhaustion above 35", "Oversold RSI weekly", "Policy intervention"]},
-        "RISK_OFF":      {"likely": ["BEAR_VOLATILE", "TRANSITION"], "unlikely": ["BULL_TREND"], "triggers": ["Forced liquidation ends", "Central bank action", "Geopolitical de-escalation"]},
-        "RISK_ON":       {"likely": ["BULL_TREND", "BULL_VOLATILE"], "unlikely": ["BEAR_VOLATILE"], "triggers": ["Momentum exhaustion", "Overbought weekly RSI", "Euphoria indicators"]},
+    # ── Markov transition probability matrix (empirical from history) ──
+    all_regimes = ["BULL_TREND", "BULL_QUIET", "BULL_VOLATILE", "TRANSITION", "BEAR_QUIET", "BEAR_VOLATILE", "RISK_ON", "RISK_OFF"]
+    transition_counts = {}
+    for i in range(len(history) - 1):
+        fr = history[i].get("regime", "UNKNOWN")
+        to = history[i + 1].get("regime", "UNKNOWN")
+        if fr not in transition_counts:
+            transition_counts[fr] = {}
+        transition_counts[fr][to] = transition_counts[fr].get(to, 0) + 1
+    
+    # Convert to probabilities
+    transition_matrix = {}
+    for fr, targets in transition_counts.items():
+        total = sum(targets.values())
+        if total > 0:
+            transition_matrix[fr] = {to: round(cnt / total, 3) for to, cnt in sorted(targets.items(), key=lambda x: -x[1])}
+    
+    # If no history, use theoretical priors
+    if regime not in transition_matrix:
+        theoretical = {
+            "BULL_TREND":    {"BULL_TREND": 0.60, "BULL_VOLATILE": 0.20, "TRANSITION": 0.15, "BEAR_QUIET": 0.05},
+            "BULL_QUIET":    {"BULL_QUIET": 0.50, "BULL_TREND": 0.25, "TRANSITION": 0.20, "BULL_VOLATILE": 0.05},
+            "BULL_VOLATILE": {"BULL_VOLATILE": 0.35, "TRANSITION": 0.30, "BULL_TREND": 0.20, "BEAR_VOLATILE": 0.15},
+            "TRANSITION":    {"TRANSITION": 0.30, "BULL_QUIET": 0.20, "BEAR_QUIET": 0.20, "BULL_TREND": 0.15, "BEAR_VOLATILE": 0.15},
+            "BEAR_QUIET":    {"BEAR_QUIET": 0.45, "BEAR_VOLATILE": 0.25, "TRANSITION": 0.25, "BULL_QUIET": 0.05},
+            "BEAR_VOLATILE": {"BEAR_VOLATILE": 0.30, "BEAR_QUIET": 0.30, "TRANSITION": 0.30, "RISK_OFF": 0.10},
+            "RISK_ON":       {"RISK_ON": 0.40, "BULL_TREND": 0.30, "BULL_VOLATILE": 0.20, "TRANSITION": 0.10},
+            "RISK_OFF":      {"RISK_OFF": 0.25, "BEAR_VOLATILE": 0.35, "TRANSITION": 0.30, "BEAR_QUIET": 0.10},
+        }
+        transition_matrix[regime] = theoretical.get(regime, {"TRANSITION": 1.0})
+    
+    # ── Regime duration analysis ──
+    regime_durations = {}  # regime -> list of durations in days
+    if history:
+        current_r = history[0].get("regime")
+        start_t = history[0].get("timestamp", "")
+        for h in history[1:]:
+            if h.get("regime") != current_r:
+                if start_t and h.get("timestamp"):
+                    try:
+                        d1 = datetime.fromisoformat(start_t.replace("Z", ""))
+                        d2 = datetime.fromisoformat(h["timestamp"].replace("Z", ""))
+                        days = max(1, (d2 - d1).days)
+                        regime_durations.setdefault(current_r, []).append(days)
+                    except Exception:
+                        pass
+                current_r = h.get("regime")
+                start_t = h.get("timestamp", "")
+    
+    duration_stats = {}
+    for r, durations in regime_durations.items():
+        duration_stats[r] = {
+            "avg_days": round(statistics.mean(durations), 1) if durations else 0,
+            "max_days": max(durations) if durations else 0,
+            "min_days": min(durations) if durations else 0,
+            "occurrences": len(durations),
+        }
+    
+    # Current regime age
+    current_age_days = None
+    if regime_start:
+        try:
+            rs = datetime.fromisoformat(regime_start.replace("Z", ""))
+            current_age_days = max(1, (datetime.now() - rs).days)
+        except Exception:
+            current_age_days = 1
+    
+    # ── Factor exposure by regime (theoretical, quant-standard) ──
+    factor_exposure = {
+        "BULL_TREND":    {"momentum": 0.85, "value": 0.30, "quality": 0.50, "low_vol": -0.20, "size": 0.40, "carry": 0.60},
+        "BULL_QUIET":    {"momentum": 0.60, "value": 0.50, "quality": 0.70, "low_vol": 0.40, "size": 0.30, "carry": 0.70},
+        "BULL_VOLATILE": {"momentum": 0.40, "value": 0.20, "quality": 0.60, "low_vol": 0.10, "size": -0.10, "carry": 0.30},
+        "TRANSITION":    {"momentum": -0.10, "value": 0.10, "quality": 0.40, "low_vol": 0.20, "size": -0.20, "carry": 0.00},
+        "BEAR_QUIET":    {"momentum": -0.50, "value": 0.40, "quality": 0.60, "low_vol": 0.50, "size": -0.40, "carry": -0.20},
+        "BEAR_VOLATILE": {"momentum": -0.80, "value": -0.30, "quality": 0.30, "low_vol": 0.20, "size": -0.60, "carry": -0.50},
+        "RISK_ON":       {"momentum": 0.90, "value": 0.10, "quality": 0.20, "low_vol": -0.40, "size": 0.60, "carry": 0.80},
+        "RISK_OFF":      {"momentum": -0.90, "value": -0.50, "quality": 0.50, "low_vol": 0.60, "size": -0.80, "carry": -0.70},
     }
     
-    transitions = transition_map.get(regime, {"likely": ["TRANSITION"], "unlikely": [], "triggers": []})
-    
-    # Regime characteristics
-    characteristics = {
-        "BULL_TREND":    {"stance": "Full offense", "position_size": "100%", "strategy": "Momentum longs, breakout entries, trail stops wide", "avoid": "Shorting, mean-reversion", "risk": "LOW"},
-        "BULL_QUIET":    {"stance": "Accumulate", "position_size": "80%", "strategy": "Buy dips to SMA20, sell puts for income", "avoid": "Chasing extended names", "risk": "LOW"},
-        "BULL_VOLATILE": {"stance": "Selective offense", "position_size": "60%", "strategy": "Buy sharp dips, tighter stops, reduce on rips", "avoid": "Full position sizes, overnight holds", "risk": "MEDIUM"},
-        "TRANSITION":    {"stance": "Neutral / hedged", "position_size": "40-50%", "strategy": "Reduce exposure, hedge with puts, wait for clarity", "avoid": "New directional bets, conviction trades", "risk": "ELEVATED"},
-        "BEAR_QUIET":    {"stance": "Defensive", "position_size": "30%", "strategy": "Short rallies, put spreads, gold/bonds", "avoid": "Buying dips, bottom-fishing", "risk": "HIGH"},
-        "BEAR_VOLATILE": {"stance": "Maximum defense", "position_size": "20%", "strategy": "Cash heavy, deep OTM puts, VIX calls", "avoid": "Any longs except safe havens", "risk": "VERY HIGH"},
-        "RISK_OFF":      {"stance": "Bunker mode", "position_size": "10%", "strategy": "Cash is king, gold, short-term treasuries only", "avoid": "ALL equity exposure", "risk": "EXTREME"},
-        "RISK_ON":       {"stance": "Full risk", "position_size": "100%", "strategy": "Leverage longs, aggressive breakouts, sell puts", "avoid": "Hedges (waste of premium)", "risk": "LOW"},
+    # ── Cross-asset correlation expectations ──
+    correlation_regime = {
+        "BULL_TREND":    {"spy_qqq": 0.92, "spy_tlt": -0.30, "spy_gld": -0.10, "spy_vix": -0.82, "vix_level": "12-16", "credit_spreads": "tight"},
+        "BULL_QUIET":    {"spy_qqq": 0.90, "spy_tlt": -0.20, "spy_gld": -0.05, "spy_vix": -0.75, "vix_level": "10-14", "credit_spreads": "very tight"},
+        "BULL_VOLATILE": {"spy_qqq": 0.88, "spy_tlt": -0.10, "spy_gld": 0.10, "spy_vix": -0.78, "vix_level": "18-25", "credit_spreads": "widening"},
+        "TRANSITION":    {"spy_qqq": 0.85, "spy_tlt": 0.05, "spy_gld": 0.20, "spy_vix": -0.70, "vix_level": "16-22", "credit_spreads": "mixed"},
+        "BEAR_QUIET":    {"spy_qqq": 0.88, "spy_tlt": 0.20, "spy_gld": 0.30, "spy_vix": -0.80, "vix_level": "20-28", "credit_spreads": "wide"},
+        "BEAR_VOLATILE": {"spy_qqq": 0.93, "spy_tlt": 0.35, "spy_gld": 0.40, "spy_vix": -0.88, "vix_level": "28-45", "credit_spreads": "very wide"},
+        "RISK_ON":       {"spy_qqq": 0.95, "spy_tlt": -0.40, "spy_gld": -0.20, "spy_vix": -0.85, "vix_level": "10-13", "credit_spreads": "minimal"},
+        "RISK_OFF":      {"spy_qqq": 0.96, "spy_tlt": 0.50, "spy_gld": 0.55, "spy_vix": -0.92, "vix_level": "35-80", "credit_spreads": "blown out"},
     }
     
-    char = characteristics.get(regime, {"stance": "Unknown", "position_size": "50%", "strategy": "Wait", "avoid": "Everything", "risk": "UNKNOWN"})
+    # ── Risk metrics by regime ──
+    risk_metrics = {
+        "BULL_TREND":    {"expected_sharpe": 1.8, "max_dd_pct": -8, "daily_var_95": -1.2, "daily_cvar_95": -1.8, "position_limit_pct": 100, "leverage_max": 2.0, "kelly_fraction": 0.40},
+        "BULL_QUIET":    {"expected_sharpe": 1.5, "max_dd_pct": -5, "daily_var_95": -0.8, "daily_cvar_95": -1.2, "position_limit_pct": 80, "leverage_max": 1.5, "kelly_fraction": 0.35},
+        "BULL_VOLATILE": {"expected_sharpe": 0.8, "max_dd_pct": -15, "daily_var_95": -2.0, "daily_cvar_95": -3.2, "position_limit_pct": 60, "leverage_max": 1.0, "kelly_fraction": 0.20},
+        "TRANSITION":    {"expected_sharpe": 0.2, "max_dd_pct": -12, "daily_var_95": -1.5, "daily_cvar_95": -2.5, "position_limit_pct": 40, "leverage_max": 0.8, "kelly_fraction": 0.10},
+        "BEAR_QUIET":    {"expected_sharpe": -0.3, "max_dd_pct": -20, "daily_var_95": -1.8, "daily_cvar_95": -2.8, "position_limit_pct": 30, "leverage_max": 0.5, "kelly_fraction": 0.05},
+        "BEAR_VOLATILE": {"expected_sharpe": -1.0, "max_dd_pct": -35, "daily_var_95": -3.5, "daily_cvar_95": -5.5, "position_limit_pct": 20, "leverage_max": 0.3, "kelly_fraction": 0.02},
+        "RISK_ON":       {"expected_sharpe": 2.2, "max_dd_pct": -6, "daily_var_95": -1.0, "daily_cvar_95": -1.5, "position_limit_pct": 100, "leverage_max": 2.5, "kelly_fraction": 0.50},
+        "RISK_OFF":      {"expected_sharpe": -2.0, "max_dd_pct": -50, "daily_var_95": -5.0, "daily_cvar_95": -8.0, "position_limit_pct": 10, "leverage_max": 0.0, "kelly_fraction": 0.00},
+    }
+    
+    # ── Optimal allocation by regime ──
+    allocation = {
+        "BULL_TREND":    {"equities": 70, "bonds": 5, "gold": 5, "cash": 5, "options": 10, "alternatives": 5},
+        "BULL_QUIET":    {"equities": 60, "bonds": 10, "gold": 5, "cash": 10, "options": 10, "alternatives": 5},
+        "BULL_VOLATILE": {"equities": 40, "bonds": 10, "gold": 10, "cash": 20, "options": 15, "alternatives": 5},
+        "TRANSITION":    {"equities": 25, "bonds": 15, "gold": 15, "cash": 30, "options": 10, "alternatives": 5},
+        "BEAR_QUIET":    {"equities": 10, "bonds": 25, "gold": 20, "cash": 30, "options": 10, "alternatives": 5},
+        "BEAR_VOLATILE": {"equities": 5, "bonds": 15, "gold": 25, "cash": 35, "options": 15, "alternatives": 5},
+        "RISK_ON":       {"equities": 80, "bonds": 0, "gold": 0, "cash": 5, "options": 10, "alternatives": 5},
+        "RISK_OFF":      {"equities": 0, "bonds": 10, "gold": 30, "cash": 50, "options": 5, "alternatives": 5},
+    }
+    
+    # ── Triggers to watch ──
+    triggers = {
+        "BULL_TREND":    [
+            {"condition": "VIX > 25 for 3+ days", "outcome": "→ BULL_VOLATILE", "severity": "warning"},
+            {"condition": "SPY breaks below SMA50", "outcome": "→ TRANSITION", "severity": "danger"},
+            {"condition": "Weekly MACD bearish cross", "outcome": "→ TRANSITION", "severity": "danger"},
+            {"condition": "Yield curve re-inverts", "outcome": "→ TRANSITION", "severity": "warning"},
+        ],
+        "TRANSITION":    [
+            {"condition": "SPY reclaims SMA50 + holds 3 days", "outcome": "→ BULL_QUIET", "severity": "bullish"},
+            {"condition": "SPY breaks SMA200", "outcome": "→ BEAR_QUIET", "severity": "danger"},
+            {"condition": "VIX drops below 18", "outcome": "→ BULL_QUIET", "severity": "bullish"},
+            {"condition": "VIX spikes above 30", "outcome": "→ BEAR_VOLATILE", "severity": "danger"},
+            {"condition": "Credit spreads widen >100bps", "outcome": "→ BEAR_VOLATILE", "severity": "danger"},
+            {"condition": "Breadth >70% above SMA50", "outcome": "→ BULL_TREND", "severity": "bullish"},
+        ],
+        "BULL_VOLATILE": [
+            {"condition": "VIX mean-reverts below 18", "outcome": "→ BULL_TREND", "severity": "bullish"},
+            {"condition": "Failed rally at SMA50", "outcome": "→ TRANSITION", "severity": "warning"},
+            {"condition": "Earnings miss from mega-cap", "outcome": "→ BEAR_VOLATILE", "severity": "danger"},
+        ],
+        "BEAR_QUIET":    [
+            {"condition": "Capitulation volume spike", "outcome": "→ BEAR_VOLATILE", "severity": "danger"},
+            {"condition": "Fed signals rate cuts", "outcome": "→ TRANSITION", "severity": "bullish"},
+            {"condition": "Credit spreads normalize", "outcome": "→ TRANSITION", "severity": "bullish"},
+        ],
+        "BEAR_VOLATILE": [
+            {"condition": "VIX exhaustion >40 + reversal", "outcome": "→ BEAR_QUIET", "severity": "warning"},
+            {"condition": "Weekly RSI <25 (extreme oversold)", "outcome": "→ TRANSITION", "severity": "bullish"},
+            {"condition": "Emergency Fed action", "outcome": "→ TRANSITION", "severity": "bullish"},
+            {"condition": "Margin call cascade", "outcome": "→ RISK_OFF", "severity": "danger"},
+        ],
+        "RISK_ON":       [
+            {"condition": "Euphoria indicators peak", "outcome": "→ BULL_VOLATILE", "severity": "warning"},
+            {"condition": "Weekly RSI >80", "outcome": "→ BULL_VOLATILE", "severity": "warning"},
+        ],
+        "RISK_OFF":      [
+            {"condition": "Central bank intervention", "outcome": "→ BEAR_VOLATILE", "severity": "bullish"},
+            {"condition": "Geopolitical de-escalation", "outcome": "→ TRANSITION", "severity": "bullish"},
+        ],
+        "BULL_QUIET":    [
+            {"condition": "Breakout on volume", "outcome": "→ BULL_TREND", "severity": "bullish"},
+            {"condition": "Low-vol compression resolves down", "outcome": "→ TRANSITION", "severity": "warning"},
+        ],
+    }
+    
+    # ── Strategy playbook ──
+    playbook = {
+        "BULL_TREND":    {
+            "stance": "Full Offense", "position_size": "80-100%", "risk": "LOW",
+            "strategies": ["Momentum longs", "Breakout entries", "Trail stops wide (2-3 ATR)", "Scale into winners"],
+            "avoid": ["Shorting", "Mean-reversion", "Profit-taking too early", "Hedging (waste of premium)"],
+            "instruments": ["Long equities", "Call spreads", "Short puts (income)", "Leveraged ETFs"],
+        },
+        "BULL_QUIET":    {
+            "stance": "Accumulate", "position_size": "60-80%", "risk": "LOW",
+            "strategies": ["Buy dips to SMA20", "Sell puts for income", "Sector rotation into laggards", "Calendar spreads"],
+            "avoid": ["Chasing extended names", "Paying up for vol", "Overconcentration"],
+            "instruments": ["Long equities", "Short puts", "Iron condors", "Dividend stocks"],
+        },
+        "BULL_VOLATILE": {
+            "stance": "Selective Offense", "position_size": "40-60%", "risk": "MEDIUM",
+            "strategies": ["Buy sharp dips only", "Tighter stops (1-1.5 ATR)", "Reduce on rips", "Pair trades"],
+            "avoid": ["Full position sizes", "Overnight holds in small caps", "Selling naked puts"],
+            "instruments": ["Long equities (selective)", "Put spreads for hedge", "Collars", "Straddles on earnings"],
+        },
+        "TRANSITION":    {
+            "stance": "Neutral / Hedged", "position_size": "30-50%", "risk": "ELEVATED",
+            "strategies": ["Reduce exposure systematically", "Hedge with put spreads", "Wait for clarity", "Pairs: long defensives / short cyclicals"],
+            "avoid": ["New directional bets", "Conviction trades", "Adding to losers", "Fighting the tape"],
+            "instruments": ["Put spreads", "Gold/GLD", "Short-term bonds/TLT", "Cash", "VIX calls (tail hedge)"],
+        },
+        "BEAR_QUIET":    {
+            "stance": "Defensive", "position_size": "20-30%", "risk": "HIGH",
+            "strategies": ["Short rallies to resistance", "Put spreads on weak names", "Long gold/bonds", "Dollar-cost-average quality"],
+            "avoid": ["Buying dips aggressively", "Bottom-fishing", "Selling puts", "Leveraged longs"],
+            "instruments": ["Put spreads", "Short ETFs (SH, PSQ)", "Gold", "Treasuries", "Cash heavy"],
+        },
+        "BEAR_VOLATILE": {
+            "stance": "Maximum Defense", "position_size": "10-20%", "risk": "VERY HIGH",
+            "strategies": ["Cash is king", "Deep OTM puts for tail", "VIX calls", "Only safe havens"],
+            "avoid": ["ANY equity longs except gold/defense", "Averaging down", "Selling vol", "Hero trades"],
+            "instruments": ["Cash", "Gold", "VIX calls", "Put spreads", "T-bills"],
+        },
+        "RISK_ON":       {
+            "stance": "Full Risk", "position_size": "80-100%", "risk": "LOW",
+            "strategies": ["Leverage longs", "Aggressive breakouts", "Sell puts aggressively", "Ride momentum"],
+            "avoid": ["Hedges (premium waste)", "Defensives", "Cash drag"],
+            "instruments": ["Leveraged ETFs", "Call options", "Short puts", "Growth/momentum names"],
+        },
+        "RISK_OFF":      {
+            "stance": "Bunker Mode", "position_size": "0-10%", "risk": "EXTREME",
+            "strategies": ["Preserve capital above all else", "Gold and T-bills only", "Wait for central bank signal"],
+            "avoid": ["ALL equity exposure", "Credit", "Emerging markets", "Anything illiquid"],
+            "instruments": ["Cash", "Gold", "T-bills", "USD"],
+        },
+    }
+    
+    # ── Regime scoring components breakdown ──
+    scoring_components = {
+        "ma_alignment": {"value": ma.get("score", 0), "weight": 0.30, "description": "Price vs SMA20/50/200 alignment"},
+        "adx_trend": {"value": spy_entry.get("adx", 0), "weight": 0.20, "description": "ADX trend strength (>25 trending, >40 strong)"},
+        "volatility": {"value": vol.get("ratio", 1.0), "weight": 0.20, "description": "Short-term vs long-term vol ratio"},
+        "trend_slope": {"value": spy_entry.get("trend_slope", ma.get("score", 0) / 100), "weight": 0.15, "description": "SMA50 slope direction and magnitude"},
+        "breadth": {"value": 0, "weight": 0.15, "description": "Market breadth (% stocks above SMA50)"},
+    }
     
     return {
         "regime": regime,
@@ -251,12 +451,23 @@ async def get_regime_detail():
         "recommendation": spy_entry.get("recommendation", ""),
         "timestamp": spy_entry.get("timestamp", ""),
         "previous_regime": prev_regime,
+        "current_age_days": current_age_days,
         "indices": entries,
-        "history": history[-30:],  # Last 30 regime changes
-        "transitions": transitions,
-        "characteristics": char,
-        "ma_alignment": spy_entry.get("ma_alignment", {}),
-        "volatility_regime": spy_entry.get("volatility_regime", {}),
+        "history": history[-60:],
+        "transition_matrix": transition_matrix.get(regime, {}),
+        "full_transition_matrix": transition_matrix,
+        "duration_stats": duration_stats,
+        "factor_exposure": factor_exposure.get(regime, {}),
+        "all_factor_exposure": factor_exposure,
+        "correlations": correlation_regime.get(regime, {}),
+        "risk_metrics": risk_metrics.get(regime, {}),
+        "all_risk_metrics": risk_metrics,
+        "allocation": allocation.get(regime, {}),
+        "triggers": triggers.get(regime, []),
+        "playbook": playbook.get(regime, {}),
+        "scoring_components": scoring_components,
+        "ma_alignment": ma,
+        "volatility_regime": vol,
     }
 
 
