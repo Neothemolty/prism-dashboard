@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { api } from '../api';
 
@@ -101,7 +102,7 @@ function TransitionArrow({ from, to, type }) {
   );
 }
 
-export default function RegimePage({ onBack }) {
+export default function RegimePage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -121,7 +122,7 @@ export default function RegimePage({ onBack }) {
 
   if (!data || data.regime === 'UNKNOWN') return (
     <div className="min-h-screen bg-[#0a0e17] p-6">
-      <button onClick={onBack} className="text-slate-400 hover:text-white text-sm mb-4">← Back to Dashboard</button>
+      <Link to="/" className="text-slate-400 hover:text-white text-sm mb-4 inline-block">← Back to Dashboard</Link>
       <div className="text-center text-slate-500 mt-20">No regime data available yet.</div>
     </div>
   );
@@ -143,9 +144,9 @@ export default function RegimePage({ onBack }) {
       <header className="border-b border-[#1e2d3d] px-6 py-3">
         <div className="max-w-[1440px] mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button onClick={onBack} className="text-slate-400 hover:text-white transition text-sm flex items-center gap-1">
+            <Link to="/" className="text-slate-400 hover:text-white transition text-sm flex items-center gap-1">
               ← Dashboard
-            </button>
+            </Link>
             <div className="w-px h-6 bg-slate-700" />
             <h1 className="text-lg font-bold text-white">🔮 PRISM Regime Gate</h1>
           </div>
